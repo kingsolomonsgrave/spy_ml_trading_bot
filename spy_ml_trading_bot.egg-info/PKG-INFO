@@ -1,0 +1,18 @@
+Metadata-Version: 2.1
+Name: spy-ml-trading-bot
+Version: 0.1.0
+Summary: A modular machine learning-based trading bot for SPY and crypto assets using EMA signals and model filtering.
+Home-page: https://github.com/kingsolomonsgrave/spy_ml_trading_bot
+Author: Dr. Mauri K Hall
+Author-email: maurikhall@gmail.com
+Classifier: Programming Language :: Python :: 3
+Classifier: License :: OSI Approved :: MIT License
+Classifier: Operating System :: OS Independent
+Requires-Python: >=3.8
+Description-Content-Type: text/markdown
+
+# SPY ML Trading Bot
+
+A modular machine-learning based trading bot for SPY and crypto assets using EMA, feature engineering, and model filtering.
+
+Author: Mauri Hall
