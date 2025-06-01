@@ -41,6 +41,140 @@ from .feature_engineering import extract_trade_features
 from .signals import conditions
 from .signals import candle_conditions
 from .signals import should_take_trade
+from collections import namedtuple
+from .signals import conditions_vectorized, should_take_trade_vectorized
+
+
+def optimized_ml_filtered_backtest(df,
+                                    model=None,
+                                    risk_reward=1.27,
+                                    tick_size=0.01,
+                                    buffer=5,
+                                    drpt=160,
+                                    model_type='rf',
+                                    overnight=True,
+                                    random_state=None,
+                                    verbose=False,
+                                    dollar_risk=200,
+                                    asset_class='crypto'):
+    if verbose:
+        print(f"overnight is {overnight}")
+
+    df = df.copy()
+    df['ema20'] = EMAIndicator(df['Close'], window=20).ema_indicator()
+    df.dropna(inplace=True)
+
+    close = df['Close'].values
+    high = df['High'].values
+    low = df['Low'].values
+    open_ = df['Open'].values
+    ema20 = df['ema20'].values
+    volume = df['Volume'].values
+    index = df.index.to_numpy()
+    HLOCV_EMA = (high, low, open_, close, volume, ema20)
+
+    if model is None and model_type in ('xgb', 'rf'):
+        raise ValueError("You must pass a trained model for ML filtering.")
+
+    slippage1 = simulate_slippage(len(df))
+    slippage2 = simulate_slippage(len(df))
+
+    Trade = namedtuple('Trade', ['time', 'entry', 'stop', 'tp', 'risk_per_unit', 'position_size',
+                                 'profit', 'commission', 'net_profit', 'status', 'exit', 'exit_time'])
+
+    trades = []
+    in_trade = False
+
+    for i in range(20, len(df) - (buffer + 2)):
+        if not in_trade:
+            if conditions_vectorized(i, HLOCV_EMA):  # you must implement a vectorized conditions
+                take_the_trade = should_take_trade_vectorized(i, HLOCV_EMA, model) if model_type in ('rf', 'xgb') else True
+
+                if take_the_trade:
+                    trigger_price = high[i] + tick_size
+                    for j in range(1, buffer + 1):
+                        if high[i + j] >= trigger_price + slippage1[i]:
+                            entry_index = i + j
+                            entry_price = trigger_price + slippage1[i]
+                            stop_price = np.min(low[i - 12:i])
+                            risk_per_unit = entry_price - stop_price
+                            take_profit = entry_price + risk_per_unit * risk_reward
+
+                            position_size, commission = calculate_commissions(entry_price, stop_price,
+                                                                               dollar_risk, 0.002, asset_class)
+
+                            trades.append(Trade(index[entry_index], entry_price, stop_price, take_profit,
+                                                risk_per_unit, position_size, 'open', 'open', 'open',
+                                                'open', None, None))
+
+                            in_trade = True
+                            trade_open_index = entry_index
+                            break
+        else:
+            for j in range(trade_open_index + 1, len(df)):
+                current_time = index[j]
+                current_date = current_time.date()
+                entry_time = index[trade_open_index]
+                entry_date = entry_time.date()
+                exit_cutoff = entry_time + timedelta(hours=24)
+                close_price = close[j] + slippage2[j]
+
+                position_size = trades[-1].position_size
+                commission = calculate_commissions(entry_price, stop_price, dollar_risk, 0.002, asset_class)[1]
+
+                if j + 1 >= len(df):
+                    profit = (entry_price - close_price) * position_size
+                    trades[-1] = trades[-1]._replace(status='expired', exit=close_price,
+                                                     exit_time=current_time, profit=profit,
+                                                     commission=commission,
+                                                     net_profit=profit - commission)
+                    in_trade = False
+                    break
+
+                if low[j] <= trades[-1].stop:
+                    exit_price = trades[-1].stop + slippage2[j]
+                    profit = (exit_price - entry_price) * position_size
+                    trades[-1] = trades[-1]._replace(status='stopped_out', exit=exit_price,
+                                                     exit_time=current_time, profit=profit,
+                                                     commission=commission,
+                                                     net_profit=profit - commission)
+                    in_trade = False
+                    break
+
+                if high[j] >= trades[-1].tp:
+                    exit_price = trades[-1].tp + slippage2[j]
+                    profit = (exit_price - entry_price) * position_size
+                    trades[-1] = trades[-1]._replace(status='take_profit', exit=exit_price,
+                                                     exit_time=current_time, profit=profit,
+                                                     commission=commission,
+                                                     net_profit=profit - commission)
+                    in_trade = False
+                    break
+
+                if current_time >= exit_cutoff or (current_time - entry_time).total_seconds() > 86400:
+                    exit_price = open_[j + 1]
+                    next_time = index[j + 1]
+                    profit = (exit_price - entry_price) * position_size
+                    trades[-1] = trades[-1]._replace(status='timed_out', exit=exit_price,
+                                                     exit_time=next_time, profit=profit,
+                                                     commission=commission,
+                                                     net_profit=profit - commission)
+                    in_trade = False
+                    break
+
+                if overnight and current_date != entry_date:
+                    exit_price = open_[j + 1]
+                    next_time = index[j + 1]
+                    profit = (exit_price - entry_price) * position_size
+                    trades[-1] = trades[-1]._replace(status='overnight_exit', exit=exit_price,
+                                                     exit_time=next_time, profit=profit,
+                                                     commission=commission,
+                                                     net_profit=profit - commission)
+                    in_trade = False
+                    break
+
+    return pd.DataFrame(trades)
+
 def ml_filtered_backtest(df, 
                          model = None,
                          risk_reward=1.27, 

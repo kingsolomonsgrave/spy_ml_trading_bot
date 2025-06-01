@@ -12,6 +12,6 @@ __version__ = "0.1.0"
 from .data_loader import get_yf_data, get_binance_ohlcv_paged, get_ibkr_data
 from .evaluator import test_trades
 from .modeling import model_select
-from .backtester import ml_filtered_backtest
+from .backtester import optimized_ml_filtered_backtest
 from .feature_engineering import collect_trade_data, extract_trade_features
-from .signals import conditions, candle_conditions, should_take_trade
+from .signals import conditions_vectorized, should_take_trade_vectorized

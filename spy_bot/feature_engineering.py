@@ -5,6 +5,86 @@ Created on Sat May 31 12:37:01 2025
 
 @author: maurihall
 """
+import numpy as np
+import pandas as pd
+from .signals import conditions_vectorized
+
+
+
+def collect_trade_data_fast(df, risk_reward=1.27, tick_size=0.01, buffer=5, drpt=160):
+    features = []
+    df = df.copy()
+    df.dropna(inplace=True)
+    trades = []
+    in_trade = False
+    n = len(df)
+    
+    #Numpy Arrays
+    highs = df['High'].values
+    lows = df['Low'].values
+    opens = df['Open'].values
+    closes = df['Close'].values
+    volumes = df['Volume'].values
+    ema20 = df['ema20'].values
+    HLOCV_EMA = [highs, lows, opens, closes, volumes, ema20]
+    
+    rolling_low_12 = pd.Series(lows).rolling(12).min().values
+    rolling_std_20 = pd.Series(highs).rolling(20).std().values
+
+    for i in range(20, n - buffer - 2):
+        c1_idx = i - 2
+        c2_idx = i - 1
+        c3_idx = i
+
+        # Use array indexing instead of iloc
+        if not (np.isnan(ema20[c1_idx]) or np.isnan(ema20[c2_idx]) or np.isnan(ema20[c3_idx])):
+            
+            if conditions_vectorized(i, HLOCV_EMA):
+                trigger_price = highs[c3_idx] + tick_size
+                entry_slippage = tick_size * 2
+
+                for j in range(1, buffer + 1):
+                    fut_idx = i + j
+                    if highs[fut_idx] >= trigger_price + entry_slippage:
+                        entry_idx = fut_idx
+                        entry_price = trigger_price + entry_slippage
+                        stop_price = rolling_low_12[i]
+                        risk_per_unit = entry_price - stop_price
+                        take_profit = entry_price + risk_per_unit * risk_reward
+
+                        # Compute features
+                        vol_change = (volumes[c3_idx] - volumes[c2_idx]) / volumes[c2_idx]
+                        momentum = closes[c3_idx] - closes[c1_idx]
+                        volatility = rolling_std_20[i]
+                        ema_slope = ema20[c3_idx] - ema20[c2_idx]
+                        percent_change = (closes[c3_idx] - closes[c2_idx]) / closes[c2_idx]
+
+                        # Simulate outcome (stop or TP)
+                        outcome = 0
+                        for k in range(entry_idx + 1, n):
+                            if lows[k] <= stop_price:
+                                break
+                            elif highs[k] >= take_profit:
+                                outcome = 1
+                                break
+
+                        features.append({
+                            'volatility': volatility,
+                            'momentum': momentum,
+                            'vol_change': vol_change,
+                            'ema_slope': ema_slope,
+                            'percent_change': percent_change,
+                            'outcome': outcome
+                        })
+
+                        break  # exit buffer loop
+
+    return pd.DataFrame(features)
+
+
+
+
+
 
 def extract_trade_features(df_slice, c1, c2, c3):
     return {
